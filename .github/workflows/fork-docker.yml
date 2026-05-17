@@ -1,7 +1,7 @@
 name: Fork Docker Build & Push
 
 # Builds the crawl4ai server image from this fork's source (so the fork's
-# patches are baked in) and publishes it to Docker Hub at wondday/crawl4ai.
+# patches are baked in) and publishes it to GHCR at ghcr.io/wondday/crawl4ai.
 # Kept separate from the upstream `docker-release.yml` so syncing with
 # unclecode/crawl4ai never overwrites our deploy pipeline.
 
@@ -20,8 +20,13 @@ on:
         required: false
         default: ""
 
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/crawl4ai
+
 permissions:
   contents: read
+  packages: write
 
 jobs:
   docker:
@@ -40,27 +45,29 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Log in to Docker Hub
+      - name: Log in to GHCR
         uses: docker/login-action@v4
         with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute tags
         id: meta
         run: |
           SHA_SHORT=$(echo "${GITHUB_SHA}" | cut -c1-7)
-          TAGS="wondday/crawl4ai:latest
-          wondday/crawl4ai:sha-${SHA_SHORT}"
+          TAGS="${REGISTRY}/${IMAGE_NAME}:latest
+          ${REGISTRY}/${IMAGE_NAME}:sha-${SHA_SHORT}"
           if [ -n "${{ inputs.tag }}" ]; then
             TAGS="${TAGS}
-          wondday/crawl4ai:${{ inputs.tag }}"
+          ${REGISTRY}/${IMAGE_NAME}:${{ inputs.tag }}"
           fi
           {
             echo "tags<<EOF"
             echo "$TAGS"
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
+          echo "sha_short=${SHA_SHORT}" >> "$GITHUB_OUTPUT"
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -82,3 +89,5 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
           echo "${{ steps.meta.outputs.tags }}" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pull: \`docker pull ${REGISTRY}/${IMAGE_NAME}:sha-${{ steps.meta.outputs.sha_short }}\`" >> $GITHUB_STEP_SUMMARY
