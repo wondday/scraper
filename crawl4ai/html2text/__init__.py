@@ -701,14 +701,19 @@ class HTML2Text(html.parser.HTMLParser):
             elif self.bypass_tables:
                 if start:
                     self.soft_br()
-                if tag in ["td", "th"]:
-                    if start:
-                        self.o("<{}>\n\n".format(tag))
+                    attr_str = ""
+                    if attrs:
+                        attr_str = "".join(
+                            ' {}="{}"'.format(k, v) if v is not None else " {}".format(k)
+                            for k, v in attrs.items()
+                        )
+                    if tag in ["td", "th"]:
+                        self.o("<{}{}>\n\n".format(tag, attr_str))
                     else:
-                        self.o("\n</{}>".format(tag))
+                        self.o("<{}{}>".format(tag, attr_str))
                 else:
-                    if start:
-                        self.o("<{}>".format(tag))
+                    if tag in ["td", "th"]:
+                        self.o("\n</{}>".format(tag))
                     else:
                         self.o("</{}>".format(tag))
 
@@ -1146,7 +1151,8 @@ class CustomHTML2Text(HTML2Text):
         # Handle pre tags
         if tag == "pre":
             if start:
-                self.o("\n```\n")  # Markdown code block start
+                lang = attrs.get("data-language", "")
+                self.o(f"\n```{lang}\n")  # Markdown code block start
                 self.inside_pre = True
             else:
                 self.o("\n```\n")  # Markdown code block end
