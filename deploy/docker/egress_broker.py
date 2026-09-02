@@ -154,6 +154,11 @@ def check_redirect(location: str) -> PinnedTarget:
 
 ALLOW_INSECURE_TLS = os.environ.get("CRAWL4AI_ALLOW_INSECURE_TLS", "false").lower() == "true"
 
+# Lets a caller keep its own proxy_config instead of having it stripped. Needed
+# when the crawler's own egress IPs are blocked and a residential retry is the
+# only way through. Off by default, like the other escape hatches here.
+ALLOW_CALLER_PROXY = os.environ.get("CRAWL4AI_ALLOW_CALLER_PROXY", "false").lower() == "true"
+
 # URL of the localhost pinning forward-proxy (egress_proxy.py), set at boot.
 # When present, enforce_egress routes the browser through it so Chromium never
 # resolves the target itself (closes DNS rebinding on the browser path).
@@ -190,17 +195,31 @@ def enforce_egress(browser_config) -> None:
         return
     if not ALLOW_INSECURE_TLS and hasattr(browser_config, "ignore_https_errors"):
         browser_config.ignore_https_errors = False
-    # Drop any caller proxy, then route the browser through the pinning proxy so
-    # Chromium never resolves the target host itself (DNS-rebinding control).
-    for attr in ("proxy", "proxy_config"):
-        if getattr(browser_config, attr, None) is not None:
-            setattr(browser_config, attr, None)
-    if _EGRESS_PROXY_URL and hasattr(browser_config, "proxy_config"):
-        try:
-            from crawl4ai import ProxyConfig
-            browser_config.proxy_config = ProxyConfig(server=_EGRESS_PROXY_URL)
-        except Exception:
-            pass
+    # Normally: drop any caller proxy, then route the browser through the
+    # pinning proxy so Chromium never resolves the target host itself
+    # (DNS-rebinding control).
+    #
+    # A crawler whose own IPs are blocked by the sites it must read has to be
+    # able to retry through a residential exit, so ALLOW_CALLER_PROXY keeps a
+    # caller-supplied proxy_config. The target URL still goes through
+    # resolve_and_pin(), so what is given up is the Chromium-side DNS pinning,
+    # not URL validation. Everything below this branch still applies.
+    keep_caller_proxy = bool(
+        ALLOW_CALLER_PROXY and getattr(browser_config, "proxy_config", None)
+    )
+    # The deprecated scalar `proxy` carries no credentials and would win over
+    # proxy_config in browser_manager, so it goes regardless.
+    if getattr(browser_config, "proxy", None) is not None:
+        browser_config.proxy = None
+    if not keep_caller_proxy:
+        if getattr(browser_config, "proxy_config", None) is not None:
+            browser_config.proxy_config = None
+        if _EGRESS_PROXY_URL and hasattr(browser_config, "proxy_config"):
+            try:
+                from crawl4ai import ProxyConfig
+                browser_config.proxy_config = ProxyConfig(server=_EGRESS_PROXY_URL)
+            except Exception:
+                pass
     args = getattr(browser_config, "extra_args", None)
     if args:
         browser_config.extra_args = [
