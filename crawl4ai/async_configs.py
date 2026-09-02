@@ -300,12 +300,51 @@ _MAX_PDF_BYTES = 100 * 1024 * 1024
 _MAX_PDF_PAGES = 2000
 
 
+_UNTRUSTED_EXEMPTIONS_CACHE: Optional[Dict[str, frozenset]] = None
+
+
+def _untrusted_field_exemptions() -> Dict[str, frozenset]:
+    """Operator-declared exemptions from the untrusted-field gates.
+
+    CRAWL4AI_ALLOW_UNTRUSTED_FIELDS holds comma-separated "Type.field" entries,
+    e.g. "BrowserConfig.proxy_config,CrawlerRunConfig.js_code".
+
+    The gates exist because the API may be reachable by anyone. A deployment
+    that puts the server behind a private network boundary and a mandatory
+    operator credential has a known, single caller instead, and needs a few of
+    those fields to do its job: a per-request residential proxy for retrying
+    IP-blocked pages, and page JS to lift shadow-DOM content into the snapshot.
+    Only the listed fields open up; everything else stays fail-closed.
+    """
+    global _UNTRUSTED_EXEMPTIONS_CACHE
+    if _UNTRUSTED_EXEMPTIONS_CACHE is not None:
+        return _UNTRUSTED_EXEMPTIONS_CACHE
+
+    parsed: Dict[str, set] = {}
+    for entry in os.environ.get("CRAWL4AI_ALLOW_UNTRUSTED_FIELDS", "").split(","):
+        entry = entry.strip()
+        if not entry or "." not in entry:
+            continue
+        type_name, _, field = entry.partition(".")
+        parsed.setdefault(type_name.strip(), set()).add(field.strip())
+
+    _UNTRUSTED_EXEMPTIONS_CACHE = {k: frozenset(v) for k, v in parsed.items()}
+    return _UNTRUSTED_EXEMPTIONS_CACHE
+
+
 def _filter_untrusted_fields(type_name: str, params: dict) -> dict:
     """Drop non-allowlisted fields and raise on forbidden (power) fields."""
     forbidden = UNTRUSTED_FORBIDDEN_FIELDS.get(type_name, set())
     allowlist = UNTRUSTED_FIELD_ALLOWLIST.get(type_name)  # None => keep all non-forbidden
+    exempt = _untrusted_field_exemptions().get(type_name, frozenset())
     out = {}
     for key, value in params.items():
+        # An exemption clears both gates at once: the field is forbidden by
+        # default and absent from the allowlist, so checking it first is what
+        # makes it usable at all.
+        if key in exempt:
+            out[key] = value
+            continue
         if key in UNTRUSTED_GLOBAL_FORBIDDEN_FIELDS or key in forbidden:
             raise UntrustedConfigError(
                 f"field '{key}' is not permitted on {type_name} from an untrusted request"
